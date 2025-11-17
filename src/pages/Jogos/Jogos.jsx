@@ -1,19 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react'; // Importar o useCallback
+import React, { useState, useEffect, useCallback } from 'react';
 import { Search, X, PlusCircle, CheckCircle, Play } from 'lucide-react';
 import { Card, InputGroup, Form, Button, Spinner } from 'react-bootstrap';
 import './Jogos.css';
 
-import { sampleGames } from '../../sample';
+import { sampleGames } from '../../sample'; // Mantido para a lógica 'isGameInLibrary'
 
-// Função debounce para evitar múltiplos pedidos à API
-function debounce(func, delay) {
-  let timeout;
-  return function(...args) {
-    const context = this;
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func.apply(context, args), delay);
-  };
-}
+// URL da sua API mock local
+const API_URL = 'http://localhost:3001';
+
+// A função debounce manual foi removida. Usaremos useEffect.
 
 const Jogos = () => {
   const [gamesList, setGamesList] = useState([]);
@@ -24,78 +19,109 @@ const Jogos = () => {
   const [gameDetails, setGameDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
 
-  // Função para buscar a lista inicial de jogos populares
-  const fetchPopularGames = async () => {
+  // Envolvemos as funções de busca com useCallback para que sejam estáveis
+  // e não causem re-execuções desnecessárias do useEffect
+  const fetchGamesFromDB = useCallback(async () => {
     setLoading(true);
     try {
-      const apiKey = import.meta.env.VITE_RAWG_API_KEY;
-      const currentYear = new Date().getFullYear();
-      const response = await fetch(`https://api.rawg.io/api/games?key=${apiKey}&ordering=-rating&dates=${currentYear}-01-01,${currentYear}-12-31&page_size=40`);
+      const response = await fetch(`${API_URL}/games?_sort=rating&_order=desc`);
       const data = await response.json();
 
-      const formattedGames = data.results.map(game => ({
+      const formattedGames = data.map(game => ({
         id: game.id,
-        name: game.name,
-        image: game.background_image,
-        gameplayVideo: game.clip?.clip,
+        name: game.nome,
+        image: game.backgroundimage,
+        gameplayVideo: null,
       }));
       
       setGamesList(formattedGames);
       setMostPlayedGames(formattedGames.slice(0, 5));
     } catch (error) {
-      console.error("Erro ao buscar jogos populares:", error);
+      console.error("Erro ao buscar jogos do db.json:", error);
     } finally {
       setLoading(false);
     }
-  };
-  
-  // Efeito inicial para carregar os jogos populares
-  useEffect(() => {
-    fetchPopularGames();
-  }, []);
+  }, []); // Array vazio, só é criada uma vez
 
-  // Função para pesquisar jogos na API
-  const searchGames = async (query) => {
+  const searchGamesInDB = useCallback(async (query) => {
+    // Se a query estiver vazia, apenas chame a função de buscar todos
     if (query.trim() === '') {
-      fetchPopularGames(); // Se a pesquisa estiver vazia, volta a carregar os jogos populares
+      fetchGamesFromDB();
       return;
     }
+
     setLoading(true);
     try {
-      const apiKey = import.meta.env.VITE_RAWG_API_KEY;
-      const response = await fetch(`https://api.rawg.io/api/games?key=${apiKey}&search=${encodeURIComponent(query)}&page_size=40`);
+      // Buscar todos os jogos e filtrar do lado do cliente
+      const response = await fetch(`${API_URL}/games?_sort=rating&_order=desc`);
       const data = await response.json();
-      const formattedGames = data.results.map(game => ({
+      
+      // Filtrar jogos que contêm o termo de busca no nome
+      const filteredGames = data.filter(game => 
+        game.nome.toLowerCase().includes(query.toLowerCase())
+      );
+      
+      const formattedGames = filteredGames.map(game => ({
         id: game.id,
-        name: game.name,
-        image: game.background_image,
-        gameplayVideo: game.clip?.clip,
+        name: game.nome,
+        image: game.backgroundimage,
+        gameplayVideo: null,
       }));
       setGamesList(formattedGames);
     } catch (error) {
-      console.error("Erro ao pesquisar jogos:", error);
+      console.error("Erro ao pesquisar jogos no db.json:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchGamesFromDB]); // Depende de fetchGamesFromDB (que é estável)
 
-  // Criamos uma versão "debounced" da nossa função de pesquisa
-  const debouncedSearch = useCallback(debounce(searchGames, 500), []);
+  // Efeito inicial para carregar os jogos (sem alteração)
+  useEffect(() => {
+    fetchGamesFromDB();
+  }, [fetchGamesFromDB]);
+
+  // CORREÇÃO: Lógica de debounce usando useEffect
+  useEffect(() => {
+    // Se o termo de busca estiver vazio, carregamos todos os jogos
+    if (searchTerm.trim() === '') {
+      fetchGamesFromDB();
+      return; // Saímos do efeito
+    }
+
+    // Se o termo de busca não estiver vazio, iniciamos o timer
+    const handler = setTimeout(() => {
+      searchGamesInDB(searchTerm);
+    }, 500); // 500ms de delay
+
+    // Função de limpeza:
+    // Isso é o mais importante. O React vai chamar esta função
+    // toda vez que o 'searchTerm' mudar, cancelando o timer anterior
+    // antes de criar um novo.
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [searchTerm, searchGamesInDB, fetchGamesFromDB]); // Re-executa quando o termo ou as funções mudam
 
   // Handler para quando o texto na barra de pesquisa muda
   const handleSearchChange = (e) => {
+    // Apenas atualiza o estado. O useEffect acima fará a "mágica".
     setSearchTerm(e.target.value);
-    debouncedSearch(e.target.value);
   };
   
-  // O resto das funções continua igual...
+  // O resto das funções (fetchGameDetails, handleGameClick, etc.) continua igual.
   const fetchGameDetails = async (gameId) => {
     setDetailsLoading(true);
     try {
-      const apiKey = import.meta.env.VITE_RAWG_API_KEY;
-      const response = await fetch(`https://api.rawg.io/api/games/${gameId}?key=${apiKey}`);
+      const response = await fetch(`${API_URL}/games/${gameId}`);
       const data = await response.json();
-      setGameDetails({ description: data.description_raw });
+      
+      const description = `Plataformas: ${data.plataformas?.join(', ') || 'Não informado'}. \nGêneros: ${data.genres?.join(', ') || 'Não informado'}. \nAno de Lançamento: ${data.ano_de_lancamento || 'Não informado'}.`;
+
+      setGameDetails({ 
+        description: description,
+        playtime: data.playtime, 
+        rating: data.rating
+      });
     } catch (error) {
       console.error("Erro ao buscar detalhes do jogo:", error);
       setGameDetails({ description: "Não foi possível carregar a descrição." });
@@ -135,9 +161,9 @@ const Jogos = () => {
               </InputGroup.Text>
               <Form.Control
                 className="bg-dark text-white border-secondary"
-                placeholder="Pesquisar em mais de 500.000 jogos..."
+                placeholder="Pesquisar jogos..."
                 value={searchTerm}
-                onChange={handleSearchChange} // Usamos o novo handler
+                onChange={handleSearchChange} // Agora só atualiza o estado
               />
             </InputGroup>
           </div>
@@ -150,9 +176,10 @@ const Jogos = () => {
         </div>
       ) : (
         <>
+          {/* A seção "Mais Populares" só aparece se não houver pesquisa */}
           {searchTerm.length === 0 && (
             <div className="most-played-section mb-5">
-              <h3 className="most-played-title">Mais Populares do Ano</h3>
+              <h3 className="most-played-title">Mais Populares</h3>
               <div className="most-played-container">
                 {mostPlayedGames.map((game) => (
                   <div className="most-played-card" key={`mp-${game.id}`} onClick={() => handleGameClick(game)}>
@@ -166,8 +193,9 @@ const Jogos = () => {
             </div>
           )}
 
+          {/* Esta é a lista principal de jogos (resultados da busca ou todos) */}
           <div className="row mt-4">
-            {gamesList.map((game) => ( // Alterado para gamesList em vez de filteredGames
+            {gamesList.map((game) => ( 
               <div className="col-6 col-md-4 col-lg-3 mb-4" key={game.id} onClick={() => handleGameClick(game)}>
                 <Card className="game-card-jogos bg-dark text-white">
                   <Card.Img src={game.image} alt={game.name} className="game-card-img" />
@@ -181,16 +209,12 @@ const Jogos = () => {
         </>
       )}
 
+      {/* O Modal de Detalhes (sem alteração) */}
       {selectedGame && (
-         // O seu painel de detalhes continua aqui, sem alterações...
          <div className="details-modal-overlay" onClick={() => setSelectedGame(null)}>
            <div className="details-modal-body" onClick={(e) => e.stopPropagation()}>
              <div className="modal-video-container">
-               {selectedGame.gameplayVideo ? (
-                 <video key={selectedGame.id} src={selectedGame.gameplayVideo} autoPlay loop muted className="modal-video-header" />
-               ) : (
-                 <img src={selectedGame.image} alt={selectedGame.name} className="modal-video-header" />
-               )}
+               <img src={selectedGame.image} alt={selectedGame.name} className="modal-video-header" />
                <div className="modal-video-overlay">
                  <h2 className="modal-title">{selectedGame.name}</h2>
                </div>
@@ -202,7 +226,9 @@ const Jogos = () => {
                {detailsLoading ? (
                  <div className="text-center my-3"><Spinner animation="border" variant="light" size="sm" /></div>
                ) : (
-                 <p className="modal-description">{gameDetails?.description}</p>
+                 <p className="modal-description" style={{ whiteSpace: 'pre-wrap' }}>
+                   {gameDetails?.description}
+                 </p>
                )}
                <div className="library-status-card mt-3">
                  {isGameInLibrary(selectedGame.id) ? (
